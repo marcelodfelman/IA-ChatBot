@@ -1,6 +1,6 @@
 # ChatBot Streamlit
 
-A simple chatbot built with Streamlit and the OpenAI API, featuring login authentication backed by SQLite. The assistant is specialized in bicycle sales data analysis.
+A simple chatbot built with Streamlit and the OpenAI API, featuring login authentication backed by SQLite. The assistant is specialized in data analysis.
 
 ## Setup
 
