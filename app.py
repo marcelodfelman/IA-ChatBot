@@ -6,10 +6,14 @@ import hashlib
 import sqlite3
 import json
 import uuid
+import re
 
 load_dotenv()
 
 SYSTEM_PROMPT = "You are the world's best data analyst, specializing exclusively in analyzing bicycle sales data for our company. You never make calculation errors. When appropriate, describe graphics or charts to visualize the data. Do not respond to any topics outside of sales data analysis. If the query is not about sales data, politely decline. You can query the sales database using the query_sales_db function. The sales table has columns: id (INTEGER), date (TEXT), product (TEXT), quantity (INTEGER), price (REAL), total (REAL)."
+
+CONVERSATIONS_DIR = "conversations"
+INVALID_FILENAME_CHARS = r'[<>:"/\\|?*]'
 
 TOOLS = [
     {
@@ -30,6 +34,49 @@ TOOLS = [
         }
     }
 ]
+
+
+def _sanitize_filename_component(component):
+    if not component:
+        return "unknown"
+    safe = re.sub(INVALID_FILENAME_CHARS, "_", str(component))
+    safe = safe.strip()
+    return safe or "unknown"
+
+
+def _extract_serializable_messages(messages):
+    serializable = []
+    for msg in messages:
+        if msg.get("role") in {"user", "assistant"}:
+            cleaned = {
+                "role": msg.get("role", "assistant"),
+                "content": msg.get("content") or ""
+            }
+            serializable.append(cleaned)
+    return serializable
+
+
+def save_conversation(messages=None):
+    if messages is None:
+        messages = st.session_state.get("messages", [])
+    serializable_messages = _extract_serializable_messages(messages)
+    if not serializable_messages:
+        return None
+
+    username = _sanitize_filename_component(st.session_state.get("username", "unknown"))
+    session_id = _sanitize_filename_component(st.session_state.get("session_id", "session"))
+
+    os.makedirs(CONVERSATIONS_DIR, exist_ok=True)
+    file_path = os.path.join(CONVERSATIONS_DIR, f"{username}_{session_id}_messages.json")
+
+    try:
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(serializable_messages, f, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        st.warning(f"Could not save the conversation history: {exc}")
+        return None
+
+    return file_path
 
 def init_db():
     conn = sqlite3.connect('users.db')
@@ -61,6 +108,9 @@ if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
 
 if not st.session_state.logged_in:
+    saved_transcript_path = st.session_state.pop("last_saved_transcript", None)
+    if saved_transcript_path:
+        st.success(f"Conversation saved to `{saved_transcript_path}`")
     st.title("Login")
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
@@ -79,7 +129,7 @@ if not st.session_state.logged_in:
             st.error("Invalid credentials")
         conn.close()
 else:
-    st.title("Chatbot con OpenAI")
+    st.title("Chatbot with OpenAI")
 
     # Get API key
     api_key = os.getenv('OPENAI_API_KEY')
@@ -100,7 +150,7 @@ else:
             st.markdown(message['content'])
 
     # User input
-    if prompt := st.chat_input("Escribe tu mensaje"):
+    if prompt := st.chat_input("Type your message"):
         # Add user message
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
@@ -144,25 +194,17 @@ else:
                 message_placeholder.markdown(full_response)
 
         st.session_state.messages.append({"role": "assistant", "content": full_response})
+        save_conversation()
 
     # Logout button
     if st.button("Logout"):
-        # Save messages
-        username = st.session_state.get('username', 'unknown')
-        serializable_messages = []
-        for msg in st.session_state.messages:
-            if msg.get('role') in ['user', 'assistant']:
-                serializable_msg = {k: v for k, v in msg.items() if k != 'tool_calls'}
-                serializable_messages.append(serializable_msg)
-        session_id = st.session_state.get('session_id')
-        filename = f"{username}_{session_id}_messages.json" if session_id else f"{username}_messages.json"
-        try:
-            with open(filename, "w") as f:
-                json.dump(serializable_messages, f)
-        except TypeError:
-            # If serialization fails, persist an empty conversation for traceability
-            with open(filename, "w") as f:
-                json.dump([], f)
+        saved_path = save_conversation()
+        if saved_path:
+            try:
+                display_path = os.path.relpath(saved_path)
+            except ValueError:
+                display_path = saved_path
+            st.session_state.last_saved_transcript = display_path.replace(os.sep, "/")
         st.session_state.logged_in = False
         st.session_state.pop('messages', None)
         st.session_state.pop('session_id', None)

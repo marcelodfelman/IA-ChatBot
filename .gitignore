@@ -8,3 +8,5 @@ venv/
 # Python cache artifacts
 __pycache__/
 *.py[cod]
+
+conversations/
